@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>機票搜尋器（反追蹤版）</title>
+<style>
+:root {
+  --bg:#0f1117; --surface:#1a1d27; --card:#22263a; --border:#2e3347;
+  --accent:#4f8ef7; --accent2:#7c5cfc; --text:#e8eaf0; --muted:#8891aa;
+  --green:#34d399; --red:#f87171; --yellow:#fbbf24; --orange:#fb923c;
+  --teal:#2dd4bf;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,'Segoe UI',sans-serif;min-height:100vh}
+
+/* ── header ── */
+header{background:linear-gradient(135deg,#1a1d27,#0f1117);border-bottom:1px solid var(--border);
+  padding:18px 32px;display:flex;align-items:center;gap:12px}
+header h1{font-size:20px;font-weight:700}
+.badge{background:#1e3a2f;color:var(--green);font-size:11px;padding:3px 8px;border-radius:20px;
+  border:1px solid #2a5c42;font-weight:600}
+
+/* ── search box ── */
+.search-box{background:var(--surface);border:1px solid var(--border);border-radius:16px;
+  padding:24px 28px;max-width:960px;margin:28px auto}
+.origin-dest{display:grid;grid-template-columns:1fr 36px 1fr;gap:8px;align-items:end;margin-bottom:14px}
+.form-row{display:grid;grid-template-columns:1fr 1fr 80px 1fr;gap:14px;margin-bottom:14px}
+label{display:block;font-size:11px;color:var(--muted);margin-bottom:5px;font-weight:700;
+  letter-spacing:.6px;text-transform:uppercase}
+.iw{position:relative}
+.iw input,.iw select{width:100%;background:var(--card);border:1px solid var(--border);border-radius:9px;
+  padding:10px 13px;color:var(--text);font-size:15px;outline:none;transition:border-color .2s}
+.iw input:focus,.iw select:focus{border-color:var(--accent)}
+.ac-list{position:absolute;top:calc(100% + 4px);left:0;right:0;background:var(--card);
+  border:1px solid var(--border);border-radius:9px;z-index:99;overflow:hidden;
+  box-shadow:0 8px 32px rgba(0,0,0,.4);display:none}
+.ac-list div{padding:10px 13px;cursor:pointer;font-size:13px;display:flex;gap:10px}
+.ac-list div:hover{background:var(--border)}
+.iata{font-weight:700;color:var(--accent);min-width:36px}
+.swap-btn{background:var(--card);border:1px solid var(--border);border-radius:8px;color:var(--muted);
+  width:36px;height:36px;cursor:pointer;font-size:18px;display:flex;align-items:center;
+  justify-content:center;align-self:flex-end;transition:all .2s}
+.swap-btn:hover{color:var(--accent);border-color:var(--accent)}
+.search-btn{background:linear-gradient(135deg,var(--accent),var(--accent2));border:none;border-radius:11px;
+  color:#fff;font-size:16px;font-weight:700;padding:13px 28px;cursor:pointer;width:100%;
+  transition:opacity .2s;margin-top:6px}
+.search-btn:hover{opacity:.9}
+.search-btn:disabled{opacity:.4;cursor:not-allowed}
+.privacy-note{text-align:center;font-size:12px;color:var(--muted);margin-top:10px;display:flex;
+  align-items:center;justify-content:center;gap:6px}
+
+/* ── results ── */
+#results-section{max-width:960px;margin:0 auto 56px}
+
+/* ── section divider ── */
+.section-header{display:flex;align-items:center;gap:10px;margin:24px 0 12px}
+.section-header h2{font-size:16px;font-weight:700}
+.section-badge{font-size:11px;padding:3px 9px;border-radius:20px;font-weight:600}
+.badge-rt{background:#0f2a2a;color:var(--teal);border:1px solid #1a4a4a}
+.badge-combo{background:#1a1d30;color:var(--accent);border:1px solid #2a3060}
+.count-badge{font-size:12px;color:var(--muted);font-weight:400;margin-left:auto}
+.divider{border:none;border-top:1px solid var(--border);margin:28px 0}
+
+/* ── RT package cards ── */
+.rt-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px;margin-bottom:8px}
+.rt-card{background:var(--surface);border:1px solid #1a4a4a;border-radius:13px;
+  padding:16px;cursor:pointer;transition:border-color .2s}
+.rt-card:hover{border-color:var(--teal)}
+.rt-card.selected{border-color:var(--teal);background:#0a1f1f}
+.rt-rank{font-size:11px;color:var(--teal);font-weight:700;letter-spacing:.5px;margin-bottom:6px}
+.rt-total{font-size:24px;font-weight:800;color:var(--teal)}
+.rt-sub{font-size:11px;color:var(--muted);margin-top:1px;margin-bottom:10px}
+.rt-legs{display:flex;flex-direction:column;gap:8px}
+.rt-leg{background:var(--card);border-radius:8px;padding:8px 10px}
+.rt-leg-dir{font-size:10px;color:var(--muted);font-weight:700;letter-spacing:.5px;margin-bottom:4px}
+.rt-leg-times{display:flex;align-items:center;gap:6px;font-size:14px;font-weight:600}
+.rt-leg-arrow{color:var(--muted);font-size:11px}
+.rt-leg-meta{font-size:11px;color:var(--muted);margin-top:3px}
+
+/* ── combo cards ── */
+.combo-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-bottom:8px}
+.combo-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;
+  padding:14px 16px;cursor:pointer;transition:border-color .2s}
+.combo-card:hover,.combo-card.selected{border-color:var(--accent)}
+.combo-card.selected{background:#111827}
+.combo-rank{font-size:11px;color:var(--muted);font-weight:700;letter-spacing:.5px;margin-bottom:6px}
+.combo-total{font-size:22px;font-weight:800;color:var(--green)}
+.combo-sub{font-size:12px;color:var(--muted);margin-top:2px}
+.combo-legs{margin-top:8px;display:flex;flex-direction:column;gap:4px}
+.combo-leg{font-size:13px;display:flex;justify-content:space-between}
+.combo-leg-label{color:var(--muted);min-width:28px}
+.combo-leg-info{color:var(--text)}
+.combo-leg-price{color:var(--accent);font-weight:600}
+
+/* ── leg tabs ── */
+.sort-tabs{display:flex;gap:8px;margin-bottom:14px}
+.sort-tab{background:var(--card);border:1px solid var(--border);border-radius:7px;color:var(--muted);
+  padding:5px 13px;font-size:12px;cursor:pointer;transition:all .2s}
+.sort-tab.active{background:var(--accent);border-color:var(--accent);color:#fff}
+
+/* ── flight card ── */
+.flight-card{background:var(--surface);border:2px solid var(--border);border-radius:13px;
+  padding:16px 20px;margin-bottom:10px;cursor:pointer;transition:all .2s;position:relative}
+.flight-card:hover{border-color:#3a4060}
+.flight-card.selected-out{border-color:#34d399;background:#0d1f18}
+.flight-card.selected-ret{border-color:#7c5cfc;background:#130d20}
+.card-main{display:flex;align-items:center;gap:16px}
+.time-col{text-align:center;min-width:52px}
+.time-big{font-size:20px;font-weight:700}
+.time-iata{font-size:11px;color:var(--muted);margin-top:2px}
+.mid-col{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px}
+.dur-label{font-size:11px;color:var(--muted)}
+.line-row{display:flex;align-items:center;width:100%;gap:4px}
+.line{flex:1;height:1px;background:var(--border)}
+.plane{font-size:13px}
+.stops-badge{font-size:11px;padding:2px 8px;border-radius:20px;background:var(--card);
+  border:1px solid var(--border);color:var(--muted)}
+.stops-badge.direct{color:var(--green);border-color:#2a5c42;background:#1e3a2f}
+.stops-badge.one{color:var(--yellow);border-color:#4a3c1a;background:#2a2214}
+.stops-badge.multi{color:var(--orange);border-color:#4a2c12;background:#2a1c0d}
+.airline-col{min-width:120px;text-align:center}
+.airline-name{font-size:13px;color:var(--muted)}
+.price-col{text-align:right;min-width:100px}
+.price-big{font-size:22px;font-weight:800;color:var(--green)}
+.price-sub{font-size:11px;color:var(--muted)}
+.selected-badge{position:absolute;top:8px;right:12px;font-size:10px;font-weight:700;
+  padding:2px 7px;border-radius:20px}
+.selected-badge.out{background:#1e3a2f;color:var(--green);border:1px solid #2a5c42}
+.selected-badge.ret{background:#1a0d30;color:#a78bfa;border:1px solid #4c2c8c}
+
+.section-title{font-size:16px;font-weight:700;margin:20px 0 12px;display:flex;
+  align-items:center;justify-content:space-between}
+
+/* ── summary bar ── */
+.summary-bar{position:sticky;bottom:0;background:rgba(15,17,23,.97);
+  border-top:1px solid var(--border);padding:14px 28px;
+  display:flex;align-items:center;justify-content:space-between;max-width:960px;
+  margin:0 auto;border-radius:16px 16px 0 0;display:none}
+.summary-bar.show{display:flex}
+.sum-left .sum-label{font-size:12px;color:var(--muted)}
+.sum-left .sum-total{font-size:26px;font-weight:800;color:var(--green)}
+.sum-legs{display:flex;flex-direction:column;gap:2px;margin-left:20px}
+.sum-leg{font-size:12px;color:var(--muted)}
+.sum-leg strong{color:var(--text)}
+.book-btn{background:linear-gradient(135deg,var(--green),#059669);border:none;border-radius:10px;
+  color:#000;font-size:14px;font-weight:700;padding:12px 24px;cursor:pointer}
+
+/* ── loading / error ── */
+.loading{text-align:center;padding:44px;color:var(--muted)}
+.spinner{width:38px;height:38px;border:3px solid var(--border);border-top-color:var(--accent);
+  border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 14px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.error-box{background:#2a1a1a;border:1px solid #5a2a2a;border-radius:11px;
+  padding:14px 18px;color:var(--red)}
+.empty{text-align:center;padding:44px;color:var(--muted)}
+</style>
+</head>
+<body>
+
+<header>
+  <span style="font-size:22px">✈️</span>
+  <h1>機票搜尋器</h1>
+  <span class="badge">🔒 反追蹤版</span>
+</header>
+
+<div class="search-box">
+  <div class="origin-dest">
+    <div>
+      <label>出發地</label>
+      <div class="iw" id="ow">
+        <input id="origin" placeholder="TPE" maxlength="3" autocomplete="off">
+        <div class="ac-list" id="ol"></div>
+      </div>
+    </div>
+    <button class="swap-btn" id="swap-btn">⇌</button>
+    <div>
+      <label>目的地</label>
+      <div class="iw" id="dw">
+        <input id="destination" placeholder="NRT" maxlength="3" autocomplete="off">
+        <div class="ac-list" id="dl"></div>
+      </div>
+    </div>
+  </div>
+  <div class="form-row">
+    <div>
+      <label>出發日期</label>
+      <div class="iw"><input type="date" id="depart_date"></div>
+    </div>
+    <div>
+      <label>回程日期（選填）</label>
+      <div class="iw"><input type="date" id="return_date"></div>
+    </div>
+    <div>
+      <label>人數</label>
+      <div class="iw">
+        <select id="adults">
+          <option value="1">1</option><option value="2">2</option>
+          <option value="3">3</option><option value="4">4</option>
+        </select>
+      </div>
+    </div>
+    <div>
+      <label>艙等</label>
+      <div class="iw">
+        <select id="cabin_class">
+          <option value="ECONOMY">經濟艙</option>
+          <option value="PREMIUM_ECONOMY">豪經艙</option>
+          <option value="BUSINESS">商務艙</option>
+          <option value="FIRST">頭等艙</option>
+        </select>
+      </div>
+    </div>
+  </div>
+  <button class="search-btn" id="search-btn">🔍 搜尋機票</button>
+  <p class="privacy-note">🔒 每次搜尋使用全新無痕連線，不留 cookie，不被追蹤</p>
+</div>
+
+<div id="results-section" style="padding:0 16px"></div>
+
+<div class="summary-bar" id="summary-bar">
+  <div style="display:flex;align-items:center">
+    <div class="sum-left">
+      <div class="sum-label">已選組合總價</div>
+      <div class="sum-total" id="sum-total">TWD 0</div>
+    </div>
+    <div class="sum-legs" id="sum-legs"></div>
+  </div>
+  <button class="book-btn" onclick="openBooking()">前往訂票 →</button>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+const d7 = new Date(); d7.setDate(d7.getDate() + 7);
+$('depart_date').value = d7.toISOString().split('T')[0];
+
+// ── 機場自動完成 ───────────────────────────────────────────────
+function setupAC(inputId, listId) {
+  const inp = $(inputId), lst = $(listId);
+  let t;
+  inp.addEventListener('input', () => {
+    clearTimeout(t);
+    const q = inp.value.trim();
+    if (!q) { lst.style.display = 'none'; return; }
+    t = setTimeout(async () => {
+      const r = await fetch(`/airports?q=${encodeURIComponent(q)}`);
+      const data = await r.json();
+      if (!data.length) { lst.style.display = 'none'; return; }
+      lst.innerHTML = data.map(a =>
+        `<div onclick="pick('${inputId}','${listId}','${a.code}')">
+          <span class="iata">${a.code}</span>${a.name.split('(')[0].trim()}</div>`
+      ).join('');
+      lst.style.display = 'block';
+    }, 180);
+  });
+  inp.addEventListener('keydown', e => { if(e.key==='Escape') lst.style.display='none'; });
+  document.addEventListener('click', e => {
+    if (!inp.contains(e.target) && !lst.contains(e.target)) lst.style.display = 'none';
+  });
+}
+function pick(iid, lid, code) {
+  $(iid).value = code; $(lid).style.display = 'none';
+}
+setupAC('origin', 'ol');
+setupAC('destination', 'dl');
+
+$('swap-btn').onclick = () => {
+  [($('origin').value), ($('destination').value)] = [$('destination').value, $('origin').value];
+};
+
+// ── 全域狀態 ─────────────────────────────────────────────────
+let state = {
+  mode: null, outbound: [], inbound: [], combos: [], rtPackages: [],
+  selOut: null, selRet: null, sortOut: 'price', sortRet: 'price',
+  selRtIdx: null,   // 選中的整票套票 index
+};
+
+// ── 搜尋 ─────────────────────────────────────────────────────
+$('search-btn').onclick = doSearch;
+document.addEventListener('keydown', e => { if(e.key==='Enter') doSearch(); });
+
+async function doSearch() {
+  const origin      = $('origin').value.trim().toUpperCase();
+  const destination = $('destination').value.trim().toUpperCase();
+  const depart_date = $('depart_date').value;
+  const return_date = $('return_date').value;
+  if (!origin || !destination || !depart_date) { alert('請填寫出發地、目的地、出發日期'); return; }
+
+  const btn = $('search-btn');
+  btn.disabled = true;
+  btn.textContent = return_date ? '同時搜尋去程、回程、整票…（約 30 秒）' : '搜尋中…';
+  showLoading(!!return_date);
+
+  try {
+    const resp = await fetch('/search', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({origin, destination, depart_date, return_date,
+                            adults: $('adults').value, cabin_class: $('cabin_class').value}),
+    });
+    const data = await resp.json();
+    if (!resp.ok || data.error) { showError(data.error || '搜尋失敗'); return; }
+
+    state.mode       = data.mode;
+    state.outbound   = data.outbound   || [];
+    state.inbound    = data.inbound    || [];
+    state.combos     = data.combos     || [];
+    state.rtPackages = data.rt_packages|| [];
+    state.selOut     = null;
+    state.selRet     = null;
+    state.selRtIdx   = null;
+    state.sortOut    = 'price';
+    state.sortRet    = 'price';
+
+    render(origin, destination, depart_date, return_date);
+  } catch(e) {
+    showError('連線失敗：' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🔍 搜尋機票';
+  }
+}
+
+// ── 渲染主畫面 ────────────────────────────────────────────────
+function render(origin, destination, depart_date, return_date) {
+  const sec = $('results-section');
+  if (state.mode === 'roundtrip') {
+    renderRoundtrip(sec, origin, destination, depart_date, return_date);
+  } else {
+    renderOneway(sec, origin, destination);
+  }
+}
+
+function renderOneway(sec, origin, destination) {
+  const sorted = sortLegs(state.outbound, state.sortOut);
+  sec.innerHTML = `
+    <div class="section-title">
+      ${origin} → ${destination}
+      <span class="count-badge">共 ${sorted.length} 個航班</span>
+    </div>
+    ${sortBar('out')}
+    <div id="leg-out-list">${sorted.map((f,i) => flightCard(f,i,'out')).join('')}</div>
+  `;
+}
+
+function renderRoundtrip(sec, origin, destination, depart_date, return_date) {
+  const outSorted = sortLegs(state.outbound, state.sortOut);
+  const retSorted = sortLegs(state.inbound,  state.sortRet);
+
+  const rtHtml   = state.rtPackages.length
+    ? rtPackagesSection(state.rtPackages, origin, destination, depart_date, return_date)
+    : '';
+  const comboHtml = state.combos.length
+    ? combosSection(state.combos, state.outbound, state.inbound)
+    : '';
+
+  sec.innerHTML = `
+    ${rtHtml}
+    ${rtHtml ? '<hr class="divider">' : ''}
+
+    <div class="section-header">
+      <h2>✂️ 自選拼接</h2>
+      <span class="section-badge badge-combo">分段買票</span>
+      <span class="count-badge">去程 ${outSorted.length} 班 × 回程 ${retSorted.length} 班，自由搭配</span>
+    </div>
+
+    ${comboHtml}
+
+    <div class="section-title">
+      ✈ 去程：${origin} → ${destination}
+      <span class="count-badge">（${depart_date}）${outSorted.length} 個航班 — 點選加入組合</span>
+    </div>
+    ${sortBar('out')}
+    <div id="leg-out-list">${outSorted.map((f,i) => flightCard(f,i,'out')).join('')}</div>
+
+    <div class="section-title" style="margin-top:28px">
+      ✈ 回程：${destination} → ${origin}
+      <span class="count-badge">（${return_date}）${retSorted.length} 個航班</span>
+    </div>
+    ${sortBar('ret')}
+    <div id="leg-ret-list">${retSorted.map((f,i) => flightCard(f,i,'ret')).join('')}</div>
+  `;
+  updateSummaryBar();
+}
+
+// ── 整票來回套票區 ─────────────────────────────────────────────
+function rtPackagesSection(pkgs, origin, destination, depart_date, return_date) {
+  const cards = pkgs.slice(0, 6).map((pkg, i) => {
+    const label = i === 0 ? '🏆 最便宜套票' : i === 1 ? '💰 次便宜套票' : `套票 #${i+1}`;
+    const isSel = state.selRtIdx === i;
+    const outStopsSc = pkg.out_stops === 0 ? 'direct' : pkg.out_stops === 1 ? 'one' : 'multi';
+    const retStopsSc = pkg.ret_stops === 0 ? 'direct' : pkg.ret_stops === 1 ? 'one' : 'multi';
+    const outStopsLb = stopsLabel(pkg.out_stops, pkg.out_stops_text);
+    const retStopsLb = stopsLabel(pkg.ret_stops, pkg.ret_stops_text);
+    return `<div class="rt-card${isSel ? ' selected' : ''}" onclick="selectRtPkg(${i})">
+      <div class="rt-rank">${label}</div>
+      <div class="rt-total">TWD ${pkg.price.toLocaleString()}</div>
+      <div class="rt-sub">整票來回總價 / 人</div>
+      <div class="rt-legs">
+        <div class="rt-leg">
+          <div class="rt-leg-dir">去程 ${depart_date}</div>
+          <div class="rt-leg-times">
+            ${pkg.out_depart_time || '--:--'}
+            <span class="rt-leg-arrow">──✈──</span>
+            ${pkg.out_arrive_time || '--:--'}
+            <span class="stops-badge ${outStopsSc}" style="font-size:10px">${outStopsLb}</span>
+          </div>
+          <div class="rt-leg-meta">${pkg.out_airline}${pkg.out_duration ? ' · ' + pkg.out_duration : ''}</div>
+        </div>
+        <div class="rt-leg">
+          <div class="rt-leg-dir">回程 ${return_date}</div>
+          <div class="rt-leg-times">
+            ${pkg.ret_depart_time || '--:--'}
+            <span class="rt-leg-arrow">──✈──</span>
+            ${pkg.ret_arrive_time || '--:--'}
+            <span class="stops-badge ${retStopsSc}" style="font-size:10px">${retStopsLb}</span>
+          </div>
+          <div class="rt-leg-meta">${pkg.ret_airline}${pkg.ret_duration ? ' · ' + pkg.ret_duration : ''}</div>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  return `
+    <div class="section-header">
+      <h2>🎫 整票來回套票</h2>
+      <span class="section-badge badge-rt">Trip.com 來回票</span>
+      <span class="count-badge">共 ${pkgs.length} 個方案</span>
+    </div>
+    <div class="rt-grid">${cards}</div>
+  `;
+}
+
+function selectRtPkg(idx) {
+  state.selRtIdx = state.selRtIdx === idx ? null : idx;
+  // 選整票時清除自選拼接狀態
+  if (state.selRtIdx !== null) {
+    state.selOut = null;
+    state.selRet = null;
+  }
+  refreshAll();
+}
+
+// ── 最佳組合區（自選拼接） ─────────────────────────────────────
+function combosSection(combos, outbound, inbound) {
+  const cards = combos.map((c, ci) => {
+    const o = outbound[c.out_idx];
+    const r = inbound[c.ret_idx];
+    const label = ci === 0 ? '💰 最便宜組合' : ci === 1 ? '⚡ 次便宜' : `#${ci+1}`;
+    return `<div class="combo-card" id="combo-${ci}" onclick="applyCombo(${c.out_idx},${c.ret_idx})">
+      <div class="combo-rank">${label}</div>
+      <div class="combo-total">TWD ${c.total.toLocaleString()}</div>
+      <div class="combo-sub">每人拼接總票價</div>
+      <div class="combo-legs">
+        <div class="combo-leg">
+          <span class="combo-leg-label">去</span>
+          <span class="combo-leg-info">${o.airline} ${o.depart_time}→${o.arrive_time} ${stopsLabel(o.stops,o.stops_text)}</span>
+          <span class="combo-leg-price">+${o.price.toLocaleString()}</span>
+        </div>
+        <div class="combo-leg">
+          <span class="combo-leg-label">回</span>
+          <span class="combo-leg-info">${r.airline} ${r.depart_time}→${r.arrive_time} ${stopsLabel(r.stops,r.stops_text)}</span>
+          <span class="combo-leg-price">+${r.price.toLocaleString()}</span>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+  return `<div class="combo-grid">${cards}</div>`;
+}
+
+function applyCombo(outIdx, retIdx) {
+  state.selOut   = state.outbound[outIdx];
+  state.selRet   = state.inbound[retIdx];
+  state.selRtIdx = null;  // 選拼接時清除整票選擇
+  refreshAll();
+}
+
+// ── 排序列 ────────────────────────────────────────────────────
+function sortBar(leg) {
+  const cur = leg === 'out' ? state.sortOut : state.sortRet;
+  return `<div class="sort-tabs">
+    ${[['price','最低價'],['duration','最短時間'],['stops','最少轉機']].map(([v,l]) =>
+      `<div class="sort-tab${cur===v?' active':''}" onclick="setSort('${leg}','${v}')">${l}</div>`
+    ).join('')}
+  </div>`;
+}
+
+function setSort(leg, val) {
+  if (leg === 'out') state.sortOut = val;
+  else state.sortRet = val;
+  refreshLists();
+}
+
+function sortLegs(legs, by) {
+  return [...legs].sort((a,b) => {
+    if (by === 'price')    return (a.price||9e9) - (b.price||9e9);
+    if (by === 'stops')    return a.stops - b.stops;
+    if (by === 'duration') return durMins(a.duration) - durMins(b.duration);
+    return 0;
+  });
+}
+
+function durMins(str) {
+  if (!str) return 9999;
+  const m = str.match(/(\d+)h\s*(\d+)?m?/);
+  if (m) return parseInt(m[1]||0)*60 + parseInt(m[2]||0);
+  return 9999;
+}
+
+function refreshAll() {
+  // 重繪整票區高亮
+  document.querySelectorAll('.rt-card').forEach((el, i) => {
+    el.classList.toggle('selected', i === state.selRtIdx);
+  });
+  refreshLists();
+  updateSummaryBar();
+}
+
+function refreshLists() {
+  const outEl = $('leg-out-list');
+  const retEl = $('leg-ret-list');
+  if (outEl) outEl.innerHTML = sortLegs(state.outbound, state.sortOut).map((f,i) => flightCard(f,i,'out')).join('');
+  if (retEl) retEl.innerHTML = sortLegs(state.inbound,  state.sortRet).map((f,i) => flightCard(f,i,'ret')).join('');
+}
+
+// ── 航班卡片 ─────────────────────────────────────────────────
+function flightCard(f, idx, leg) {
+  const isSelOut = leg === 'out' && state.selOut && state.selOut.depart_time === f.depart_time && state.selOut.airline === f.airline;
+  const isSelRet = leg === 'ret' && state.selRet && state.selRet.depart_time === f.depart_time && state.selRet.airline === f.airline;
+  const cls = isSelOut ? 'selected-out' : isSelRet ? 'selected-ret' : '';
+  const badge = isSelOut ? '<span class="selected-badge out">✓ 已選去程</span>'
+              : isSelRet ? '<span class="selected-badge ret">✓ 已選回程</span>' : '';
+  const sc = f.stops === 0 ? 'direct' : f.stops === 1 ? 'one' : 'multi';
+  const sl = stopsLabel(f.stops, f.stops_text);
+
+  return `<div class="flight-card ${cls}" onclick="selectFlight(${idx},'${leg}')">
+    ${badge}
+    <div class="card-main">
+      <div class="time-col">
+        <div class="time-big">${f.depart_time||'--:--'}</div>
+        <div class="time-iata">${f.from}</div>
+      </div>
+      <div class="mid-col">
+        <div class="dur-label">${f.duration}</div>
+        <div class="line-row"><div class="line"></div><span class="plane">✈</span><div class="line"></div></div>
+        <span class="stops-badge ${sc}">${sl}</span>
+      </div>
+      <div class="time-col">
+        <div class="time-big">${f.arrive_time||'--:--'}</div>
+        <div class="time-iata">${f.to}</div>
+      </div>
+      <div class="airline-col">
+        <div class="airline-name">${f.airline}</div>
+      </div>
+      <div class="price-col">
+        <div class="price-big">${f.price ? f.price.toLocaleString() : '—'}</div>
+        <div class="price-sub">TWD / 人</div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function stopsLabel(stops, stopsText) {
+  if (stops === 0) return '直飛';
+  if (stopsText && stopsText !== '0') return stopsText;
+  return `${stops} 轉`;
+}
+
+function selectFlight(sortedIdx, leg) {
+  const sorted = leg === 'out' ? sortLegs(state.outbound, state.sortOut)
+                               : sortLegs(state.inbound,  state.sortRet);
+  const f = sorted[sortedIdx];
+  if (!f) return;
+  if (leg === 'out') state.selOut = f;
+  else               state.selRet = f;
+  state.selRtIdx = null;  // 選分段時清除整票選擇
+  refreshAll();
+}
+
+// ── 底部總計 ─────────────────────────────────────────────────
+function updateSummaryBar() {
+  const bar = $('summary-bar');
+
+  // 整票來回被選中
+  if (state.selRtIdx !== null) {
+    const pkg = state.rtPackages[state.selRtIdx];
+    if (!pkg) { bar.classList.remove('show'); return; }
+    bar.classList.add('show');
+    $('sum-total').textContent = `TWD ${pkg.price.toLocaleString()}`;
+    $('sum-legs').innerHTML = `
+      <div class="sum-leg">去程：<strong>${pkg.out_airline}</strong> ${pkg.out_depart_time}→${pkg.out_arrive_time}</div>
+      <div class="sum-leg">回程：<strong>${pkg.ret_airline}</strong> ${pkg.ret_depart_time}→${pkg.ret_arrive_time} <span style="color:var(--teal)">整票</span></div>
+    `;
+    return;
+  }
+
+  // 自選拼接
+  if (!state.selOut && !state.selRet) { bar.classList.remove('show'); return; }
+  bar.classList.add('show');
+  const total = (state.selOut?.price||0) + (state.selRet?.price||0);
+  $('sum-total').textContent = `TWD ${total.toLocaleString()}`;
+  const legs = [];
+  if (state.selOut) legs.push(`<div class="sum-leg">去程：<strong>${state.selOut.airline}</strong> ${state.selOut.depart_time}→${state.selOut.arrive_time} <span style="color:var(--green)">TWD ${(state.selOut.price||0).toLocaleString()}</span></div>`);
+  if (state.selRet) legs.push(`<div class="sum-leg">回程：<strong>${state.selRet.airline}</strong> ${state.selRet.depart_time}→${state.selRet.arrive_time} <span style="color:var(--green)">TWD ${(state.selRet.price||0).toLocaleString()}</span></div>`);
+  $('sum-legs').innerHTML = legs.join('');
+}
+
+function openBooking() {
+  if (state.selRtIdx !== null) {
+    const pkg = state.rtPackages[state.selRtIdx];
+    alert('請前往 Trip.com 搜尋整票來回：\n\n去程：' +
+      `${pkg.out_airline} ${pkg.out_depart_time}→${pkg.out_arrive_time}` +
+      '\n回程：' +
+      `${pkg.ret_airline} ${pkg.ret_depart_time}→${pkg.ret_arrive_time}` +
+      '\n\n整票總價：TWD ' + pkg.price.toLocaleString());
+    return;
+  }
+  alert('請分別到 Trip.com 搜尋並訂購你選擇的去程和回程單程票。\n\n去程：' +
+    (state.selOut ? `${state.selOut.airline} ${state.selOut.depart_time}` : '未選') +
+    '\n回程：' +
+    (state.selRet ? `${state.selRet.airline} ${state.selRet.depart_time}` : '未選'));
+}
+
+// ── loading / error ────────────────────────────────────────────
+function showLoading(isRoundtrip) {
+  $('results-section').innerHTML = `<div class="loading">
+    <div class="spinner"></div>
+    <p>${isRoundtrip
+      ? '三段平行搜尋：去程單程、回程單程、整票來回，同時查詢最低價…'
+      : '正在透過安全通道搜尋航班…'}</p>
+  </div>`;
+  $('summary-bar').classList.remove('show');
+}
+function showError(msg) {
+  $('results-section').innerHTML = `<div class="error-box">⚠️ ${msg}</div>`;
+}
+</script>
+</body>
+</html>
