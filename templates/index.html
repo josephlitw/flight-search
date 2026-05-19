@@ -154,6 +154,20 @@ label{display:block;font-size:11px;color:var(--muted);margin-bottom:5px;font-wei
 .error-box{background:#2a1a1a;border:1px solid #5a2a2a;border-radius:11px;
   padding:14px 18px;color:var(--red)}
 .empty{text-align:center;padding:44px;color:var(--muted)}
+
+/* ── source badges ── */
+.src-badge{font-size:10px;font-weight:700;padding:2px 7px;border-radius:20px;
+  display:inline-block;margin-left:6px;vertical-align:middle}
+.src-trip{background:#1a2a40;color:#60a5fa;border:1px solid #2a4060}
+.src-sky{background:#1a2030;color:#a78bfa;border:1px solid #3a2870}
+
+/* ── source filter chips ── */
+.src-filter{display:flex;gap:8px;margin-bottom:14px;align-items:center}
+.src-chip{background:var(--card);border:1px solid var(--border);border-radius:20px;
+  color:var(--muted);padding:4px 14px;font-size:12px;cursor:pointer;transition:all .2s}
+.src-chip.active-trip{background:#1a2a40;border-color:#60a5fa;color:#60a5fa}
+.src-chip.active-sky{background:#1a2030;border-color:#a78bfa;color:#a78bfa}
+.src-chip.active-all{background:var(--accent);border-color:var(--accent);color:#fff}
 </style>
 </head>
 <body>
@@ -274,22 +288,64 @@ let state = {
   mode: null, outbound: [], inbound: [], combos: [], rtPackages: [],
   selOut: null, selRet: null, sortOut: 'price', sortRet: 'price',
   selRtIdx: null,
-  // 搜尋參數（用來產生 Trip.com 訂票連結）
+  filterSrc: 'all',   // 'all' | 'Trip.com' | 'Skyscanner'
   search: { origin:'', destination:'', depart_date:'', return_date:'', adults:1, cabin_code:'y' },
 };
 
-// Trip.com 搜尋 URL 產生器
-const CABIN_CODE = { ECONOMY:'y', PREMIUM_ECONOMY:'s', BUSINESS:'c', FIRST:'f' };
+// ── 訂票 URL 產生器 ───────────────────────────────────────────
+const CABIN_CODE     = { ECONOMY:'y', PREMIUM_ECONOMY:'s', BUSINESS:'c', FIRST:'f' };
+const CABIN_SKY_MAP  = { y:'economy', s:'premiumeconomy', c:'business', f:'first' };
+
 function tripUrl(dcity, acity, ddate, adate, triptype, adults, cabin) {
-  const base = 'https://uk.trip.com/flights/showfarefirst';
   const p = new URLSearchParams({
-    dcity: dcity.toLowerCase(), acity: acity.toLowerCase(),
-    ddate, triptype, class: cabin,
-    quantity: adults, curr: 'TWD', locale: 'en-GB',
-    nonstoponly: 'off', searchboxarg: 't',
+    dcity:dcity.toLowerCase(), acity:acity.toLowerCase(),
+    ddate, triptype, class:cabin,
+    quantity:adults, curr:'TWD', locale:'en-GB',
+    nonstoponly:'off', searchboxarg:'t',
   });
   if (adate) p.set('adate', adate);
-  return `${base}?${p}`;
+  return `https://uk.trip.com/flights/showfarefirst?${p}`;
+}
+
+function skyDate(iso) { return iso.replace(/-/g,'').slice(2); }  // 2024-06-01 → 240601
+
+function skyUrl(dcity, acity, ddate, adate, adults, cabin) {
+  const cc = CABIN_SKY_MAP[cabin] || 'economy';
+  const seg = adate ? `${skyDate(ddate)}/${skyDate(adate)}/` : `${skyDate(ddate)}/`;
+  return `https://www.skyscanner.com/transport/flights/${dcity.toLowerCase()}/${acity.toLowerCase()}/${seg}?adults=${adults}&cabinclass=${cc}&currency=TWD&locale=en-GB&market=TW`;
+}
+
+function bookUrl(source, dcity, acity, ddate, adate, adults, cabin) {
+  if (source === 'Skyscanner')
+    return skyUrl(dcity, acity, ddate, adate, adults, cabin);
+  return tripUrl(dcity, acity, ddate, adate, adate ? 'rt' : 'ow', adults, cabin);
+}
+
+// 來源標籤
+function srcBadge(source) {
+  const cls = source === 'Skyscanner' ? 'src-sky' : 'src-trip';
+  return `<span class="src-badge ${cls}">${source}</span>`;
+}
+
+// 來源篩選列
+function srcFilterBar() {
+  const f = state.filterSrc;
+  return `<div class="src-filter">
+    <span style="font-size:12px;color:var(--muted)">來源：</span>
+    <div class="src-chip${f==='all'?' active-all':''}" onclick="setSrcFilter('all')">全部</div>
+    <div class="src-chip${f==='Trip.com'?' active-trip':''}" onclick="setSrcFilter('Trip.com')">Trip.com</div>
+    <div class="src-chip${f==='Skyscanner'?' active-sky':''}" onclick="setSrcFilter('Skyscanner')">Skyscanner</div>
+  </div>`;
+}
+
+function setSrcFilter(src) {
+  state.filterSrc = src;
+  refreshAll();
+}
+
+function filterLegs(legs) {
+  if (state.filterSrc === 'all') return legs;
+  return legs.filter(l => l.source === state.filterSrc);
 }
 
 // ── 搜尋 ─────────────────────────────────────────────────────
@@ -305,7 +361,7 @@ async function doSearch() {
 
   const btn = $('search-btn');
   btn.disabled = true;
-  btn.textContent = return_date ? '同時搜尋去程、回程、整票…（約 30 秒）' : '搜尋中…';
+  btn.textContent = return_date ? 'Trip.com + Skyscanner 同步搜尋中…（約 30 秒）' : 'Trip.com + Skyscanner 同步搜尋中…';
   showLoading(!!return_date);
 
   try {
@@ -328,6 +384,7 @@ async function doSearch() {
     state.selRtIdx   = null;
     state.sortOut    = 'price';
     state.sortRet    = 'price';
+    state.filterSrc  = 'all';
     state.search     = {
       origin, destination, depart_date, return_date,
       adults: $('adults').value,
@@ -354,14 +411,15 @@ function render(origin, destination, depart_date, return_date) {
 }
 
 function renderOneway(sec, origin, destination) {
-  const sorted = sortLegs(state.outbound, state.sortOut);
+  const filtered = filterLegs(sortLegs(state.outbound, state.sortOut));
   sec.innerHTML = `
     <div class="section-title">
       ${origin} → ${destination}
-      <span class="count-badge">共 ${sorted.length} 個航班</span>
+      <span class="count-badge">共 ${filtered.length} 個航班</span>
     </div>
+    ${srcFilterBar()}
     ${sortBar('out')}
-    <div id="leg-out-list">${sorted.map((f,i) => flightCard(f,i,'out')).join('')}</div>
+    <div id="leg-out-list">${filtered.map((f,i) => flightCard(f,i,'out')).join('')}</div>
   `;
 }
 
@@ -388,19 +446,21 @@ function renderRoundtrip(sec, origin, destination, depart_date, return_date) {
 
     ${comboHtml}
 
+    ${srcFilterBar()}
+
     <div class="section-title">
       ✈ 去程：${origin} → ${destination}
-      <span class="count-badge">（${depart_date}）${outSorted.length} 個航班 — 點選加入組合</span>
+      <span class="count-badge">（${depart_date}）${filterLegs(outSorted).length} 個航班 — 點選加入組合</span>
     </div>
     ${sortBar('out')}
-    <div id="leg-out-list">${outSorted.map((f,i) => flightCard(f,i,'out')).join('')}</div>
+    <div id="leg-out-list">${filterLegs(outSorted).map((f,i) => flightCard(f,i,'out')).join('')}</div>
 
     <div class="section-title" style="margin-top:28px">
       ✈ 回程：${destination} → ${origin}
-      <span class="count-badge">（${return_date}）${retSorted.length} 個航班</span>
+      <span class="count-badge">（${return_date}）${filterLegs(retSorted).length} 個航班</span>
     </div>
     ${sortBar('ret')}
-    <div id="leg-ret-list">${retSorted.map((f,i) => flightCard(f,i,'ret')).join('')}</div>
+    <div id="leg-ret-list">${filterLegs(retSorted).map((f,i) => flightCard(f,i,'ret')).join('')}</div>
   `;
   updateSummaryBar();
 }
@@ -541,8 +601,8 @@ function refreshAll() {
 function refreshLists() {
   const outEl = $('leg-out-list');
   const retEl = $('leg-ret-list');
-  if (outEl) outEl.innerHTML = sortLegs(state.outbound, state.sortOut).map((f,i) => flightCard(f,i,'out')).join('');
-  if (retEl) retEl.innerHTML = sortLegs(state.inbound,  state.sortRet).map((f,i) => flightCard(f,i,'ret')).join('');
+  if (outEl) outEl.innerHTML = filterLegs(sortLegs(state.outbound, state.sortOut)).map((f,i) => flightCard(f,i,'out')).join('');
+  if (retEl) retEl.innerHTML = filterLegs(sortLegs(state.inbound,  state.sortRet)).map((f,i) => flightCard(f,i,'ret')).join('');
 }
 
 // ── 航班卡片 ─────────────────────────────────────────────────
@@ -573,6 +633,7 @@ function flightCard(f, idx, leg) {
       </div>
       <div class="airline-col">
         <div class="airline-name">${f.airline}</div>
+        ${srcBadge(f.source||'')}
       </div>
       <div class="price-col">
         <div class="price-big">${f.price ? f.price.toLocaleString() : '—'}</div>
@@ -630,21 +691,24 @@ function updateSummaryBar() {
 function openBooking() {
   const s = state.search;
   if (state.selRtIdx !== null) {
-    // 整票來回 → 直接開 Trip.com 來回票搜尋結果
-    const url = tripUrl(s.origin, s.destination, s.depart_date,
-                        s.return_date, 'rt', s.adults, s.cabin_code);
+    // 整票來回：依來源開對應的網站
+    const pkg = state.rtPackages[state.selRtIdx];
+    const url = bookUrl(pkg.source||'Trip.com', s.origin, s.destination,
+                        s.depart_date, s.return_date, s.adults, s.cabin_code);
     window.open(url, '_blank', 'noopener');
     return;
   }
-  // 自選拼接 → 去程/回程各開一個分頁
+  // 自選拼接：依各段來源分別開對應網站
   if (state.selOut) {
-    const url = tripUrl(s.origin, s.destination, s.depart_date,
-                        null, 'ow', s.adults, s.cabin_code);
+    const url = bookUrl(state.selOut.source||'Trip.com',
+                        s.origin, s.destination, s.depart_date, null,
+                        s.adults, s.cabin_code);
     window.open(url, '_blank', 'noopener');
   }
   if (state.selRet) {
-    const url = tripUrl(s.destination, s.origin, s.return_date,
-                        null, 'ow', s.adults, s.cabin_code);
+    const url = bookUrl(state.selRet.source||'Trip.com',
+                        s.destination, s.origin, s.return_date, null,
+                        s.adults, s.cabin_code);
     window.open(url, '_blank', 'noopener');
   }
 }
@@ -654,8 +718,8 @@ function showLoading(isRoundtrip) {
   $('results-section').innerHTML = `<div class="loading">
     <div class="spinner"></div>
     <p>${isRoundtrip
-      ? '三段平行搜尋：去程單程、回程單程、整票來回，同時查詢最低價…'
-      : '正在透過安全通道搜尋航班…'}</p>
+      ? 'Trip.com ＋ Skyscanner 同步搜尋（6 個平行 context）：去程、回程、整票，全部一次找…'
+      : 'Trip.com ＋ Skyscanner 同步搜尋中，比對最低價…'}</p>
   </div>`;
   $('summary-bar').classList.remove('show');
 }
