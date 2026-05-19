@@ -273,8 +273,24 @@ $('swap-btn').onclick = () => {
 let state = {
   mode: null, outbound: [], inbound: [], combos: [], rtPackages: [],
   selOut: null, selRet: null, sortOut: 'price', sortRet: 'price',
-  selRtIdx: null,   // 選中的整票套票 index
+  selRtIdx: null,
+  // 搜尋參數（用來產生 Trip.com 訂票連結）
+  search: { origin:'', destination:'', depart_date:'', return_date:'', adults:1, cabin_code:'y' },
 };
+
+// Trip.com 搜尋 URL 產生器
+const CABIN_CODE = { ECONOMY:'y', PREMIUM_ECONOMY:'s', BUSINESS:'c', FIRST:'f' };
+function tripUrl(dcity, acity, ddate, adate, triptype, adults, cabin) {
+  const base = 'https://uk.trip.com/flights/showfarefirst';
+  const p = new URLSearchParams({
+    dcity: dcity.toLowerCase(), acity: acity.toLowerCase(),
+    ddate, triptype, class: cabin,
+    quantity: adults, curr: 'TWD', locale: 'en-GB',
+    nonstoponly: 'off', searchboxarg: 't',
+  });
+  if (adate) p.set('adate', adate);
+  return `${base}?${p}`;
+}
 
 // ── 搜尋 ─────────────────────────────────────────────────────
 $('search-btn').onclick = doSearch;
@@ -312,6 +328,11 @@ async function doSearch() {
     state.selRtIdx   = null;
     state.sortOut    = 'price';
     state.sortRet    = 'price';
+    state.search     = {
+      origin, destination, depart_date, return_date,
+      adults: $('adults').value,
+      cabin_code: CABIN_CODE[$('cabin_class').value] || 'y',
+    };
 
     render(origin, destination, depart_date, return_date);
   } catch(e) {
@@ -607,19 +628,25 @@ function updateSummaryBar() {
 }
 
 function openBooking() {
+  const s = state.search;
   if (state.selRtIdx !== null) {
-    const pkg = state.rtPackages[state.selRtIdx];
-    alert('請前往 Trip.com 搜尋整票來回：\n\n去程：' +
-      `${pkg.out_airline} ${pkg.out_depart_time}→${pkg.out_arrive_time}` +
-      '\n回程：' +
-      `${pkg.ret_airline} ${pkg.ret_depart_time}→${pkg.ret_arrive_time}` +
-      '\n\n整票總價：TWD ' + pkg.price.toLocaleString());
+    // 整票來回 → 直接開 Trip.com 來回票搜尋結果
+    const url = tripUrl(s.origin, s.destination, s.depart_date,
+                        s.return_date, 'rt', s.adults, s.cabin_code);
+    window.open(url, '_blank', 'noopener');
     return;
   }
-  alert('請分別到 Trip.com 搜尋並訂購你選擇的去程和回程單程票。\n\n去程：' +
-    (state.selOut ? `${state.selOut.airline} ${state.selOut.depart_time}` : '未選') +
-    '\n回程：' +
-    (state.selRet ? `${state.selRet.airline} ${state.selRet.depart_time}` : '未選'));
+  // 自選拼接 → 去程/回程各開一個分頁
+  if (state.selOut) {
+    const url = tripUrl(s.origin, s.destination, s.depart_date,
+                        null, 'ow', s.adults, s.cabin_code);
+    window.open(url, '_blank', 'noopener');
+  }
+  if (state.selRet) {
+    const url = tripUrl(s.destination, s.origin, s.return_date,
+                        null, 'ow', s.adults, s.cabin_code);
+    window.open(url, '_blank', 'noopener');
+  }
 }
 
 // ── loading / error ────────────────────────────────────────────
