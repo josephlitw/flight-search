@@ -1,11 +1,12 @@
 """
 機票搜尋器 - 反追蹤多源版本
-多來源平行搜尋：Trip.com + Skyscanner（各自獨立無痕 context）
+多來源平行搜尋：Trip.com + Google Flights（各自獨立無痕 context）
 每個 source 本身就是聚合器，合計覆蓋數百家航空公司與 OTA
 """
 import asyncio
 import random
 import re
+from datetime import datetime
 from flask import Flask, render_template, request, jsonify
 from playwright.async_api import async_playwright
 
@@ -19,9 +20,8 @@ USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15",
 ]
 
-CABIN_TRIP = {"ECONOMY": "y", "PREMIUM_ECONOMY": "s", "BUSINESS": "c", "FIRST": "f"}
-CABIN_SKY  = {"ECONOMY": "economy", "PREMIUM_ECONOMY": "premiumeconomy",
-               "BUSINESS": "business", "FIRST": "first"}
+CABIN_TRIP  = {"ECONOMY": "y", "PREMIUM_ECONOMY": "s", "BUSINESS": "c", "FIRST": "f"}
+CABIN_GOOG  = {"ECONOMY": "1", "PREMIUM_ECONOMY": "2", "BUSINESS": "3", "FIRST": "4"}
 
 TRACKER_DOMAINS = [
     "google-analytics", "googletagmanager", "doubleclick",
@@ -178,157 +178,113 @@ async def scrape_trip_roundtrip(origin, dest, depart_date, return_date, adults, 
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# Skyscanner 搜尋
+# Google Flights 搜尋
 # ════════════════════════════════════════════════════════════════════════════
 
-EXTRACT_SKY_OW = """() => {
-    const flights = [];
-
-    // Skyscanner 用 data-testid 屬性
-    const cards = document.querySelectorAll(
-        '[data-testid="itinerary-card-wrapper"], ' +
-        '[class*="FlightsResults"] [class*="itinerary"], ' +
-        '[class*="ItineraryCard"]'
+EXTRACT_GOOG = """() => {
+    const results = [];
+    const items = document.querySelectorAll(
+        'li[class*="pIav2d"], ul[class*="Rk10dc"] li, [role="listitem"]'
     );
-
-    cards.forEach(card => {
+    // narrow no-break space (\\u202f) が AM/PM の前に使われる
+    const timeRe  = /(\\d{1,2}:\\d{2}[\\s\\u202f]+[AP]M)/gi;
+    const priceRe = /NT\\$([\\d,]+)/;
+    items.forEach(item => {
         try {
-            // 價格
-            const priceEl = card.querySelector(
-                '[data-testid="price-text"], [class*="Price_mainPrice"], [class*="price"]'
-            );
-            const priceNum = parseFloat((priceEl?.innerText||'').replace(/[^0-9.]/g,'')) || 0;
+            const text = item.innerText;
+            if (!text || text.length < 30) return;
 
-            // 時間（出發/抵達）
-            const timeEls = card.querySelectorAll(
-                '[data-testid$="-time"], [class*="LegInfo_routeTime"], [class*="legTime"]'
-            );
-            const times = Array.from(timeEls).map(e=>e.innerText.trim()).filter(t=>/^\d{1,2}:\d{2}/.test(t))
-                .map(t => t.length === 4 ? '0'+t : t);
+            const allTimes = [...text.matchAll(timeRe)].map(m => m[1].replace(/\\u202f/g,' ').trim());
+            if (allTimes.length < 2) return;
+            const timeMatch = [null, allTimes[0], allTimes[1]];
+            const priceMatch = text.match(priceRe);
+            if (!priceMatch) return;
 
-            // 航空公司
-            const airlineEl = card.querySelector('[data-testid="carrier-name"], [class*="LogoImage"] img, [class*="carrier"] img');
-            const airline = airlineEl?.getAttribute('alt') || airlineEl?.innerText?.trim() || '';
+            const durMatch   = text.match(/(\d+)\s*hr\s*(\d+)?\s*min/i);
+            const stopsMatch = text.match(/(Nonstop|\d+\s*stop)/i);
 
-            // 飛行時間
-            const durEl = card.querySelector('[data-testid="duration"], [class*="duration"], [class*="Duration"]');
-            const duration = durEl?.innerText?.trim() || '';
-
-            // 轉機
-            const stopsEl = card.querySelector('[data-testid="stops-text"], [class*="StopsInfo"], [class*="stops"]');
-            const stopsText = stopsEl?.innerText?.trim() || '';
-            const stops = (stopsText.includes('direct') || stopsText.includes('nonstop') || stopsText === '0')
-                ? 0 : (stopsText.match(/\d+/) ? parseInt(stopsText.match(/\d+/)[0]) : 1);
-
-            // 機場代碼
-            const iataEls = card.querySelectorAll('[class*="iata"], [class*="Iata"], [class*="airport-name"]');
-            const from_airport = iataEls[0]?.innerText?.trim() || '';
-            const to_airport   = iataEls[1]?.innerText?.trim() || '';
-
-            if (priceNum > 0) {
-                flights.push({ price:priceNum, airline,
-                    depart_time:times[0]||'', arrive_time:times[1]||'',
-                    from_airport, to_airport, duration, stops, stops_text:stopsText });
+            // 航空公司：在第一個時間之後的第一個非符號、非時間行
+            const lines = text.split('\\n').map(l=>l.trim()).filter(l=>l);
+            let airline = '';
+            for (let i=0; i<lines.length; i++) {
+                if (/\d{1,2}:\d{2}[\s ]*[AP]M/i.test(lines[i])) {
+                    // 跳過 "–" 行和第二個時間行
+                    for (let j=i+1; j<lines.length; j++) {
+                        if (/^[–\-]+$/.test(lines[j])) continue;
+                        if (/\d{1,2}:\d{2}[\s ]*[AP]M/i.test(lines[j])) continue;
+                        airline = lines[j];
+                        break;
+                    }
+                    break;
+                }
             }
-        } catch(e) {}
-    });
-    return flights;
-}"""
 
-EXTRACT_SKY_RT = """() => {
-    const pkgs = [];
-    // Skyscanner 來回結果每張卡含兩個 leg section
-    const cards = document.querySelectorAll(
-        '[data-testid="itinerary-card-wrapper"], [class*="ItineraryCard"]'
-    );
-    cards.forEach(card => {
-        try {
-            const priceEl = card.querySelector('[data-testid="price-text"], [class*="Price_mainPrice"]');
-            const priceNum = parseFloat((priceEl?.innerText||'').replace(/[^0-9.]/g,'')) || 0;
+            const stops = stopsMatch
+                ? (stopsMatch[0].toLowerCase()==='nonstop' ? 0 : parseInt(stopsMatch[0])||1)
+                : 0;
 
-            const timeEls = card.querySelectorAll('[data-testid$="-time"], [class*="LegInfo_routeTime"]');
-            const times = Array.from(timeEls).map(e=>e.innerText.trim()).filter(t=>/^\d{1,2}:\d{2}/.test(t))
-                .map(t => t.length===4 ? '0'+t : t);
+            let dur = '';
+            if (durMatch) {
+                const h = durMatch[1], m = durMatch[2]||'0';
+                dur = `${h}h ${m}m`;
+            }
 
-            const airlineEls = card.querySelectorAll('[data-testid="carrier-name"], [class*="LogoImage"] img');
-            function airlineName(el){ return el?.getAttribute('alt')||el?.innerText?.trim()||''; }
-
-            const durEls = card.querySelectorAll('[data-testid="duration"], [class*="duration"]');
-            const stopsEls = card.querySelectorAll('[data-testid="stops-text"], [class*="StopsInfo"]');
-            function sc(el){ const t=(el?.innerText||'').toLowerCase();
-                return (t.includes('direct')||t==='0')?0:(t.match(/\d+/)?parseInt(t.match(/\d+/)[0]):1); }
-
-            if (priceNum > 0) pkgs.push({
-                price:priceNum,
-                out_depart_time:times[0]||'', out_arrive_time:times[1]||'',
-                ret_depart_time:times[2]||'', ret_arrive_time:times[3]||'',
-                out_airline:airlineName(airlineEls[0]),
-                ret_airline:airlineName(airlineEls[1])||airlineName(airlineEls[0]),
-                out_from:'', out_to:'', ret_from:'', ret_to:'',
-                out_duration:durEls[0]?.innerText?.trim()||'',
-                ret_duration:durEls[1]?.innerText?.trim()||'',
-                out_stops:sc(stopsEls[0]), ret_stops:sc(stopsEls[1]),
-                out_stops_text:stopsEls[0]?.innerText?.trim()||'',
-                ret_stops_text:stopsEls[1]?.innerText?.trim()||'',
+            results.push({
+                price:       parseInt(priceMatch[1].replace(/,/g,'')),
+                airline:     airline,
+                depart_time: timeMatch[1].trim(),
+                arrive_time: timeMatch[2].trim(),
+                duration:    dur,
+                stops:       stops,
+                stops_text:  stopsMatch ? stopsMatch[0] : 'Nonstop',
+                from_airport:'',
+                to_airport:  '',
             });
         } catch(e) {}
     });
-    return pkgs;
+    return results;
 }"""
 
 
-def _sky_date(iso_date):
-    """2024-06-01 → 240601 (Skyscanner URL format)"""
-    return iso_date.replace("-", "")[2:]  # drop century → YYMMDD
+def _goog_date(iso_date):
+    """2026-06-15 → 'June 15 2026'"""
+    d = datetime.strptime(iso_date, "%Y-%m-%d")
+    return d.strftime("%B %-d %Y")
 
 
-async def scrape_sky_oneway(origin, dest, date, adults, cabin):
-    cabin_sky = CABIN_SKY.get(cabin, "economy")
-    sky_date  = _sky_date(date)
-    url = (f"https://www.skyscanner.com/transport/flights"
-           f"/{origin.lower()}/{dest.lower()}/{sky_date}/"
-           f"?adults={adults}&cabinclass={cabin_sky}&currency=TWD&locale=en-GB&market=TW")
-    headers = {
-        "Accept-Language": "en-GB,en;q=0.9",
-        "Referer": "https://www.skyscanner.com/",
-    }
+def _ampm_to_24h(t):
+    """'2:00 AM' → '02:00',  '6:30 PM' → '18:30'  (handles   narrow no-break space)"""
+    t = re.sub(r'[\s ]+', ' ', t.strip())
+    try:
+        return datetime.strptime(t, "%I:%M %p").strftime("%H:%M")
+    except Exception:
+        return t
+
+
+async def scrape_google_oneway(origin, dest, date, adults, cabin):
+    gdate = _goog_date(date)
+    q = f"flights+from+{origin}+to+{dest}+on+{gdate.replace(' ','+')}+{adults}+adult"
+    url = f"https://www.google.com/travel/flights?q={q}&curr=TWD"
     async with async_playwright() as p:
-        browser, ctx = await _new_ctx(p, extra_headers=headers)
+        browser, ctx = await _new_ctx(p)
         page = await ctx.new_page()
         try:
-            await _load_page(page, url,
-                             "[data-testid='itinerary-card-wrapper'], [class*='ItineraryCard']",
-                             timeout_sel=30000, extra_wait=3000)
-            raw = await page.evaluate(EXTRACT_SKY_OW)
+            await page.goto(url, wait_until="domcontentloaded", timeout=45000)
+            try:
+                await page.wait_for_selector(
+                    'li[class*="pIav2d"], ul[class*="Rk10dc"] li', timeout=25000
+                )
+            except Exception:
+                await page.wait_for_timeout(10000)
+            await page.wait_for_timeout(2000)
+            raw = await page.evaluate(EXTRACT_GOOG)
             await ctx.close(); await browser.close()
-            return _to_legs(raw, origin, dest, date, "Skyscanner"), None
-        except Exception as e:
-            try: await ctx.close(); await browser.close()
-            except Exception: pass
-            return [], str(e)
-
-
-async def scrape_sky_roundtrip(origin, dest, depart_date, return_date, adults, cabin):
-    cabin_sky = CABIN_SKY.get(cabin, "economy")
-    sky_out   = _sky_date(depart_date)
-    sky_ret   = _sky_date(return_date)
-    url = (f"https://www.skyscanner.com/transport/flights"
-           f"/{origin.lower()}/{dest.lower()}/{sky_out}/{sky_ret}/"
-           f"?adults={adults}&cabinclass={cabin_sky}&currency=TWD&locale=en-GB&market=TW")
-    headers = {
-        "Accept-Language": "en-GB,en;q=0.9",
-        "Referer": "https://www.skyscanner.com/",
-    }
-    async with async_playwright() as p:
-        browser, ctx = await _new_ctx(p, extra_headers=headers)
-        page = await ctx.new_page()
-        try:
-            await _load_page(page, url,
-                             "[data-testid='itinerary-card-wrapper'], [class*='ItineraryCard']",
-                             timeout_sel=30000, extra_wait=3000)
-            raw = await page.evaluate(EXTRACT_SKY_RT)
-            await ctx.close(); await browser.close()
-            return _to_rt_pkgs(raw, origin, dest, depart_date, return_date, "Skyscanner"), None
+            # 時間轉 24h
+            for f in raw:
+                f["depart_time"] = _ampm_to_24h(f["depart_time"])
+                f["arrive_time"] = _ampm_to_24h(f["arrive_time"])
+                f["currency"] = "TWD"
+            return _to_legs(raw, origin, dest, date, "Google Flights"), None
         except Exception as e:
             try: await ctx.close(); await browser.close()
             except Exception: pass
@@ -340,9 +296,10 @@ async def scrape_sky_roundtrip(origin, dest, depart_date, return_date, adults, c
 # ════════════════════════════════════════════════════════════════════════════
 
 async def search_all_oneway(origin, dest, date, adults, cabin):
+    """Trip.com + Google Flights 平行搜尋單程"""
     results = await asyncio.gather(
         scrape_trip_oneway(origin, dest, date, adults, cabin),
-        scrape_sky_oneway(origin, dest, date, adults, cabin),
+        scrape_google_oneway(origin, dest, date, adults, cabin),
         return_exceptions=True,
     )
     legs, errors = [], []
@@ -358,29 +315,34 @@ async def search_all_oneway(origin, dest, date, adults, cabin):
 
 
 async def search_all_roundtrip(origin, dest, depart_date, return_date, adults, cabin):
-    """出程單程 + 回程單程 + Trip.com 整票 + Skyscanner 整票，共 4 個平行搜尋"""
+    """
+    5 個平行搜尋：
+      Trip.com 去程 / 回程 / 整票來回
+      Google Flights 去程 / 回程
+    """
     results = await asyncio.gather(
         scrape_trip_oneway(origin, dest, depart_date, adults, cabin),
         scrape_trip_oneway(dest, origin, return_date, adults, cabin),
         scrape_trip_roundtrip(origin, dest, depart_date, return_date, adults, cabin),
-        scrape_sky_oneway(origin, dest, depart_date, adults, cabin),
-        scrape_sky_oneway(dest, origin, return_date, adults, cabin),
-        scrape_sky_roundtrip(origin, dest, depart_date, return_date, adults, cabin),
+        scrape_google_oneway(origin, dest, depart_date, adults, cabin),
+        scrape_google_oneway(dest, origin, return_date, adults, cabin),
         return_exceptions=True,
     )
+
     def extract(res):
         if isinstance(res, Exception): return [], str(res)
         return res
 
-    (out_trip, e1), (ret_trip, e2) = extract(results[0]), extract(results[1])
-    (rt_trip,  e3)                 = extract(results[2])
-    (out_sky,  e4), (ret_sky,  e5) = extract(results[3]), extract(results[4])
-    (rt_sky,   e6)                 = extract(results[5])
+    (out_trip, e1) = extract(results[0])
+    (ret_trip, e2) = extract(results[1])
+    (rt_trip,  e3) = extract(results[2])
+    (out_goog, e4) = extract(results[3])
+    (ret_goog, e5) = extract(results[4])
 
-    outbound = _merge_legs(out_trip, out_sky)
-    inbound  = _merge_legs(ret_trip, ret_sky)
-    rt_pkgs  = _merge_rt(rt_trip, rt_sky)
-    errors   = [e for e in [e1,e2,e3,e4,e5,e6] if e]
+    outbound = _merge_legs(out_trip, out_goog)
+    inbound  = _merge_legs(ret_trip, ret_goog)
+    rt_pkgs  = rt_trip   # 整票目前只有 Trip.com
+    errors   = [e for e in [e1, e2, e3, e4, e5] if e]
 
     return outbound, inbound, rt_pkgs, errors
 
@@ -554,7 +516,7 @@ def search():
             "out_count":   len(outbound),
             "ret_count":   len(inbound),
             "rt_count":    len(rt_pkgs),
-            "sources":     ["Trip.com", "Skyscanner"],
+            "sources":     ["Trip.com", "Google Flights"],
             "errors":      errors,
         })
     else:
@@ -567,7 +529,7 @@ def search():
             "mode":    "oneway",
             "outbound": legs,
             "count":   len(legs),
-            "sources": ["Trip.com", "Skyscanner"],
+            "sources": ["Trip.com", "Google Flights"],
         })
 
 

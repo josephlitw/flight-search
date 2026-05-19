@@ -288,13 +288,12 @@ let state = {
   mode: null, outbound: [], inbound: [], combos: [], rtPackages: [],
   selOut: null, selRet: null, sortOut: 'price', sortRet: 'price',
   selRtIdx: null,
-  filterSrc: 'all',   // 'all' | 'Trip.com' | 'Skyscanner'
+  filterSrc: 'all',   // 'all' | 'Trip.com' | 'Google Flights'
   search: { origin:'', destination:'', depart_date:'', return_date:'', adults:1, cabin_code:'y' },
 };
 
 // ── 訂票 URL 產生器 ───────────────────────────────────────────
-const CABIN_CODE     = { ECONOMY:'y', PREMIUM_ECONOMY:'s', BUSINESS:'c', FIRST:'f' };
-const CABIN_SKY_MAP  = { y:'economy', s:'premiumeconomy', c:'business', f:'first' };
+const CABIN_CODE = { ECONOMY:'y', PREMIUM_ECONOMY:'s', BUSINESS:'c', FIRST:'f' };
 
 function tripUrl(dcity, acity, ddate, adate, triptype, adults, cabin) {
   const p = new URLSearchParams({
@@ -307,23 +306,22 @@ function tripUrl(dcity, acity, ddate, adate, triptype, adults, cabin) {
   return `https://uk.trip.com/flights/showfarefirst?${p}`;
 }
 
-function skyDate(iso) { return iso.replace(/-/g,'').slice(2); }  // 2024-06-01 → 240601
-
-function skyUrl(dcity, acity, ddate, adate, adults, cabin) {
-  const cc = CABIN_SKY_MAP[cabin] || 'economy';
-  const seg = adate ? `${skyDate(ddate)}/${skyDate(adate)}/` : `${skyDate(ddate)}/`;
-  return `https://www.skyscanner.com/transport/flights/${dcity.toLowerCase()}/${acity.toLowerCase()}/${seg}?adults=${adults}&cabinclass=${cc}&currency=TWD&locale=en-GB&market=TW`;
+function googUrl(dcity, acity, ddate, adults) {
+  const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const d = new Date(ddate);
+  const dateStr = `${months[d.getMonth()]}+${d.getDate()}+${d.getFullYear()}`;
+  return `https://www.google.com/travel/flights?q=flights+from+${dcity}+to+${acity}+on+${dateStr}+${adults}+adult&curr=TWD`;
 }
 
 function bookUrl(source, dcity, acity, ddate, adate, adults, cabin) {
-  if (source === 'Skyscanner')
-    return skyUrl(dcity, acity, ddate, adate, adults, cabin);
+  if (source === 'Google Flights')
+    return googUrl(dcity, acity, ddate, adults);
   return tripUrl(dcity, acity, ddate, adate, adate ? 'rt' : 'ow', adults, cabin);
 }
 
 // 來源標籤
 function srcBadge(source) {
-  const cls = source === 'Skyscanner' ? 'src-sky' : 'src-trip';
+  const cls = source === 'Google Flights' ? 'src-sky' : 'src-trip';
   return `<span class="src-badge ${cls}">${source}</span>`;
 }
 
@@ -334,7 +332,7 @@ function srcFilterBar() {
     <span style="font-size:12px;color:var(--muted)">來源：</span>
     <div class="src-chip${f==='all'?' active-all':''}" onclick="setSrcFilter('all')">全部</div>
     <div class="src-chip${f==='Trip.com'?' active-trip':''}" onclick="setSrcFilter('Trip.com')">Trip.com</div>
-    <div class="src-chip${f==='Skyscanner'?' active-sky':''}" onclick="setSrcFilter('Skyscanner')">Skyscanner</div>
+    <div class="src-chip${f==='Google Flights'?' active-sky':''}" onclick="setSrcFilter('Google Flights')">Google Flights</div>
   </div>`;
 }
 
@@ -361,7 +359,7 @@ async function doSearch() {
 
   const btn = $('search-btn');
   btn.disabled = true;
-  btn.textContent = return_date ? 'Trip.com + Skyscanner 同步搜尋中…（約 30 秒）' : 'Trip.com + Skyscanner 同步搜尋中…';
+  btn.textContent = return_date ? 'Trip.com + Google Flights 同步搜尋中…（約 30 秒）' : 'Trip.com + Google Flights 同步搜尋中…';
   showLoading(!!return_date);
 
   try {
@@ -718,8 +716,8 @@ function showLoading(isRoundtrip) {
   $('results-section').innerHTML = `<div class="loading">
     <div class="spinner"></div>
     <p>${isRoundtrip
-      ? 'Trip.com ＋ Skyscanner 同步搜尋（6 個平行 context）：去程、回程、整票，全部一次找…'
-      : 'Trip.com ＋ Skyscanner 同步搜尋中，比對最低價…'}</p>
+      ? 'Trip.com ＋ Google Flights 同步搜尋（5 個平行 context）：去程、回程、整票，全部一次找…'
+      : 'Trip.com ＋ Google Flights 同步搜尋中，比對最低價…'}</p>
   </div>`;
   $('summary-bar').classList.remove('show');
 }
