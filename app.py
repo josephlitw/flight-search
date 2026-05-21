@@ -263,20 +263,29 @@ def _ampm_to_24h(t):
 
 async def scrape_google_oneway(origin, dest, date, adults, cabin):
     gdate = _goog_date(date)
-    q = f"flights+from+{origin}+to+{dest}+on+{gdate.replace(' ','+')}+{adults}+adult"
-    url = f"https://www.google.com/travel/flights?q={q}&curr=TWD"
+    cabin_num = CABIN_GOOG.get(cabin, "1")
+    # 長途線等待時間拉長（洲際航班結果頁載入較慢）
+    long_haul = origin not in ("NRT","HND","KIX","ICN","HKG","BKK","SIN") \
+                and dest not in ("NRT","HND","KIX","ICN","HKG","BKK","SIN")
+    wait_sel  = 35000 if long_haul else 25000
+    extra     = 5000  if long_haul else 2000
+
+    url = (f"https://www.google.com/travel/flights?q="
+           f"flights+from+{origin}+to+{dest}+on+{gdate.replace(' ','+')}+"
+           f"{adults}+adult&curr=TWD&cabin={cabin_num}")
+
     async with async_playwright() as p:
         browser, ctx = await _new_ctx(p)
         page = await ctx.new_page()
         try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=45000)
+            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
             try:
                 await page.wait_for_selector(
-                    'li[class*="pIav2d"], ul[class*="Rk10dc"] li', timeout=25000
+                    'li[class*="pIav2d"], ul[class*="Rk10dc"] li', timeout=wait_sel
                 )
             except Exception:
-                await page.wait_for_timeout(10000)
-            await page.wait_for_timeout(2000)
+                await page.wait_for_timeout(extra + 5000)
+            await page.wait_for_timeout(extra)
             raw = await page.evaluate(EXTRACT_GOOG)
             await ctx.close(); await browser.close()
             # 時間轉 24h
@@ -351,13 +360,20 @@ def _merge_legs(*leg_lists):
     merged = []
     for ll in leg_lists:
         merged.extend(ll)
-    # 去重（相同航空 + 起飛時間 + 日期，保留來源多的）
-    seen, out = {}, []
-    for leg in sorted(merged, key=lambda x: x["price"] or 999999):
-        key = (leg["airline"], leg["depart_time"], leg["date"])
-        if key not in seen:
-            seen[key] = True
-            out.append(leg)
+    merged.sort(key=lambda x: x["price"] or 999999)
+    # 去重：先以（起飛時間＋價格）為主鍵，航空公司有值的優先保留
+    price_time_seen: dict = {}   # (depart_time, price, date) → index in out
+    out = []
+    for leg in merged:
+        pt_key = (leg["depart_time"], leg["price"], leg["date"])
+        if pt_key in price_time_seen:
+            # 如果已有紀錄但航空公司是空的，用新的（可能有航空名稱）取代
+            idx = price_time_seen[pt_key]
+            if not out[idx]["airline"] and leg["airline"]:
+                out[idx] = leg
+            continue
+        price_time_seen[pt_key] = len(out)
+        out.append(leg)
     return out
 
 
@@ -383,25 +399,40 @@ def _merge_rt(*pkg_lists):
 
 def _to_legs(raw_list, origin, dest, date, source):
     legs = []
+    seen_pt: dict = {}   # (depart_time, price) → index，用來去重同一來源內的重複
     for f in raw_list:
         price = f.get("price", 0)
         if price and price < 500:
             price = round(price * 40)
-        legs.append({
+        dep = f.get("depart_time", "")
+        arr = f.get("arrive_time", "")
+        # 跳過 arrive == depart（表示擷取只得到一個時間，為無效資料）
+        if dep and arr and dep == arr:
+            continue
+        leg = {
             "price":       price,
             "currency":    "TWD",
             "source":      source,
             "airline":     f.get("airline", ""),
             "flight_no":   f.get("flight_no", ""),
-            "depart_time": f.get("depart_time", ""),
-            "arrive_time": f.get("arrive_time", ""),
+            "depart_time": dep,
+            "arrive_time": arr,
             "from":        f.get("from_airport") or origin,
             "to":          f.get("to_airport")   or dest,
             "duration":    f.get("duration", ""),
             "stops":       f.get("stops", 0),
             "stops_text":  f.get("stops_text", ""),
             "date":        date,
-        })
+        }
+        pt_key = (dep, price)
+        if pt_key in seen_pt:
+            # 同一來源重複：airline 有值的優先
+            idx = seen_pt[pt_key]
+            if not legs[idx]["airline"] and leg["airline"]:
+                legs[idx] = leg
+            continue
+        seen_pt[pt_key] = len(legs)
+        legs.append(leg)
     legs.sort(key=lambda x: x["price"] or 999999)
     return legs
 
@@ -537,18 +568,49 @@ def search():
 def airports():
     q = request.args.get("q", "").lower()
     AIRPORTS = [
+        # ── 台灣 ──
         ("TPE", "台灣桃園 (TPE)"), ("KHH", "高雄小港 (KHH)"), ("RMQ", "台中清泉崗 (RMQ)"),
-        ("TNN", "台南 (TNN)"), ("NRT", "東京成田 (NRT)"), ("HND", "東京羽田 (HND)"),
-        ("KIX", "大阪關西 (KIX)"), ("ITM", "大阪伊丹 (ITM)"), ("CTS", "北海道新千歲 (CTS)"),
-        ("OKA", "沖繩那霸 (OKA)"), ("FUK", "福岡 (FUK)"), ("NGO", "名古屋 (NGO)"),
-        ("ICN", "首爾仁川 (ICN)"), ("GMP", "首爾金浦 (GMP)"), ("BKK", "曼谷素萬那普 (BKK)"),
-        ("DMK", "曼谷廊曼 (DMK)"), ("SIN", "新加坡樟宜 (SIN)"), ("HKG", "香港 (HKG)"),
-        ("MNL", "馬尼拉 (MNL)"), ("KUL", "吉隆坡 (KUL)"), ("CGK", "雅加達 (CGK)"),
-        ("SYD", "雪梨 (SYD)"), ("MEL", "墨爾本 (MEL)"), ("LAX", "洛杉磯 (LAX)"),
-        ("SFO", "舊金山 (SFO)"), ("JFK", "紐約甘迺迪 (JFK)"), ("ORD", "芝加哥 (ORD)"),
-        ("SEA", "西雅圖 (SEA)"), ("LHR", "倫敦希斯洛 (LHR)"), ("CDG", "巴黎戴高樂 (CDG)"),
-        ("AMS", "阿姆斯特丹 (AMS)"), ("FRA", "法蘭克福 (FRA)"), ("DXB", "杜拜 (DXB)"),
-        ("NOU", "努美阿 (NOU)"),
+        ("TNN", "台南 (TNN)"),
+        # ── 日本 ──
+        ("NRT", "東京成田 (NRT)"), ("HND", "東京羽田 (HND)"), ("KIX", "大阪關西 (KIX)"),
+        ("ITM", "大阪伊丹 (ITM)"), ("CTS", "北海道新千歲 (CTS)"), ("OKA", "沖繩那霸 (OKA)"),
+        ("FUK", "福岡 (FUK)"), ("NGO", "名古屋 (NGO)"),
+        # ── 韓國 ──
+        ("ICN", "首爾仁川 (ICN)"), ("GMP", "首爾金浦 (GMP)"),
+        # ── 東南亞 ──
+        ("BKK", "曼谷素萬那普 (BKK)"), ("DMK", "曼谷廊曼 (DMK)"), ("SIN", "新加坡樟宜 (SIN)"),
+        ("HKG", "香港 (HKG)"), ("MNL", "馬尼拉 (MNL)"), ("KUL", "吉隆坡 (KUL)"),
+        ("CGK", "雅加達 (CGK)"), ("SGN", "胡志明市 (SGN)"), ("HAN", "河內 (HAN)"),
+        ("BKI", "亞庇/哥打京那巴魯 (BKI)"), ("DPS", "峇里島 (DPS)"),
+        # ── 中東 ──
+        ("DXB", "杜拜 (DXB)"), ("DOH", "杜哈 (DOH)"), ("AUH", "阿布達比 (AUH)"),
+        # ── 大洋洲 ──
+        ("SYD", "雪梨 (SYD)"), ("MEL", "墨爾本 (MEL)"), ("BNE", "布里斯本 (BNE)"),
+        ("AKL", "奧克蘭 (AKL)"), ("NOU", "努美阿 (NOU)"),
+        # ── 歐洲 ──
+        ("LHR", "倫敦希斯洛 (LHR)"), ("LGW", "倫敦蓋威克 (LGW)"),
+        ("CDG", "巴黎戴高樂 (CDG)"), ("ORY", "巴黎奧利 (ORY)"),
+        ("AMS", "阿姆斯特丹 (AMS)"), ("FRA", "法蘭克福 (FRA)"), ("MUC", "慕尼黑 (MUC)"),
+        ("MAD", "馬德里 (MAD)"), ("BCN", "巴塞隆納 (BCN)"),
+        ("FCO", "羅馬菲烏米奇諾 (FCO)"), ("MXP", "米蘭馬爾彭薩 (MXP)"),
+        ("ZRH", "蘇黎世 (ZRH)"), ("VIE", "維也納 (VIE)"), ("BRU", "布魯塞爾 (BRU)"),
+        ("HEL", "赫爾辛基 (HEL)"), ("CPH", "哥本哈根 (CPH)"), ("ARN", "斯德哥爾摩 (ARN)"),
+        ("OSL", "奧斯陸 (OSL)"), ("IST", "伊斯坦堡 (IST)"), ("ATH", "雅典 (ATH)"),
+        ("LIS", "里斯本 (LIS)"), ("PRG", "布拉格 (PRG)"), ("WAW", "華沙 (WAW)"),
+        # ── 北美 ──
+        ("LAX", "洛杉磯 (LAX)"), ("SFO", "舊金山 (SFO)"), ("JFK", "紐約甘迺迪 (JFK)"),
+        ("EWR", "紐約紐瓦克 (EWR)"), ("ORD", "芝加哥 (ORD)"), ("SEA", "西雅圖 (SEA)"),
+        ("YVR", "溫哥華 (YVR)"), ("YYZ", "多倫多皮爾遜 (YYZ)"),
+        ("BOS", "波士頓 (BOS)"), ("MIA", "邁阿密 (MIA)"), ("ATL", "亞特蘭大 (ATL)"),
+        ("DFW", "達拉斯 (DFW)"), ("DEN", "丹佛 (DEN)"), ("LAS", "拉斯維加斯 (LAS)"),
+        ("HNL", "火奴魯魯 (HNL)"),
+        # ── 南美 ──
+        ("GRU", "聖保羅瓜魯柳斯 (GRU)"), ("EZE", "布宜諾斯艾利斯 (EZE)"),
+        ("SCL", "聖地牙哥 (SCL)"),
+        # ── 印度 ──
+        ("DEL", "新德里 (DEL)"), ("BOM", "孟買 (BOM)"),
+        # ── 非洲 ──
+        ("JNB", "約翰尼斯堡 (JNB)"), ("NBO", "奈洛比 (NBO)"),
     ]
     matched = [{"code": c, "name": n} for c, n in AIRPORTS if q in c.lower() or q in n.lower()]
     return jsonify(matched[:10])
